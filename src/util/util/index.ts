@@ -45,6 +45,7 @@ export * from "./DisplayNameFonts";
 export * from "./MediaProxy";
 export * from "./DiscoverySearch";
 export * from "./VideoFrame";
+export * from "./VideoRemux";
 export * from "./ApexExperiments";
 export * from "./VoiceHealth";
 export * from "./NativeVoice";

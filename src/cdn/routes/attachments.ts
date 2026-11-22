@@ -7,7 +7,17 @@ import { fileTypeFromBuffer } from "file-type";
 import imageSize from "image-size";
 import { HTTPError } from "lambert-server/HTTPError";
 import { Attachment, CloudAttachment, attachmentRequiresMembership, getDatabase, isGuildAttachmentMember } from "@spacebar/database";
-import { Config, extractVideoFrame, readVideoDimensions, reserveVideoFrame, NewUrlUserSignatureData, Snowflake, isRequestSignature, tryUrlSignature } from "@spacebar/util";
+import {
+    Config,
+    extractVideoFrame,
+    readVideoDimensions,
+    remuxMatroska,
+    reserveVideoFrame,
+    NewUrlUserSignatureData,
+    Snowflake,
+    isRequestSignature,
+    tryUrlSignature,
+} from "@spacebar/util";
 import { storage, multer, setCacheControl, safeMediaType } from "../util";
 import { InternalCdnAttachment } from "@spacebar/util/dtos/MessageOptions";
 import { cleanAttachmentFilename } from "@spacebar/util/util/AttachmentFilename";
@@ -281,19 +291,32 @@ router.put(
                         const ft = await fileTypeFromBuffer(buffer);
                         mimeType = att.contentType = ft?.mime || "application/octet-stream";
                     }
+                    let storedBuffer = buffer;
+                    const detected = await fileTypeFromBuffer(buffer);
+                    if (
+                        detected?.mime === "video/x-matroska" ||
+                        detected?.mime === "video/matroska" ||
+                        (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])))
+                    ) {
+                        const remuxed = await remuxMatroska(buffer);
+                        if (remuxed) {
+                            storedBuffer = remuxed.body;
+                            mimeType = att.contentType = remuxed.mime;
+                        }
+                    }
 
                     try {
                         const dimensions = mimeType?.includes("image")
-                            ? (imageSize(buffer) ?? (await readImageDimensions(buffer)))
+                            ? (imageSize(storedBuffer) ?? (await readImageDimensions(storedBuffer)))
                             : mimeType?.startsWith("video/")
-                              ? readVideoDimensions(buffer)
+                              ? readVideoDimensions(storedBuffer)
                               : undefined;
                         if (dimensions) {
                             att.width = dimensions.width;
                             att.height = dimensions.height;
                         }
                     } catch {
-                        const dimensions = mimeType?.includes("image") ? await readImageDimensions(buffer) : undefined;
+                        const dimensions = mimeType?.includes("image") ? await readImageDimensions(storedBuffer) : undefined;
                         if (dimensions) {
                             att.width = dimensions.width;
                             att.height = dimensions.height;
@@ -303,15 +326,15 @@ router.put(
                         }
                     }
 
-                    await storage.set(path, buffer, `user:${att.userId}`);
+                    await storage.set(path, storedBuffer, `user:${att.userId}`);
                     const kept = await getDatabase()!.transaction(async (manager) => {
                         const current = await manager.getRepository(CloudAttachment).findOne({ lock: { mode: "pessimistic_write" }, where: { ...where, id: att.id } });
                         if (!current) return false;
                         current.contentType = att.contentType;
                         current.width = att.width;
                         current.height = att.height;
-                        current.size = buffer.length;
-                        current.contentHash = createHash("sha256").update(buffer).digest("hex");
+                        current.size = storedBuffer.length;
+                        current.contentHash = createHash("sha256").update(storedBuffer).digest("hex");
                         await manager.save(current);
                         return true;
                     });

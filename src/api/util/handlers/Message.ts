@@ -174,6 +174,8 @@ async function processMedia(media: UnfurledMediaItem, messageId: string, batchId
                 displayName = displayName.replace(/\.[a-z0-9]+$/i, "") + "." + extension;
                 finalContentType = extension === "webp" ? "image/webp" : "image/jpeg";
             }
+        } else if (/\.mkv$/i.test(displayName) && (contentType === "video/webm" || contentType === "video/mp4")) {
+            displayName = displayName.replace(/\.mkv$/i, contentType === "video/webm" ? ".webm" : ".mp4");
         }
         const realAtt = Attachment.create({
             filename: displayName,
@@ -946,6 +948,8 @@ export async function convertCloudAttachmentToAttachment(
             cloudDisplayName = cloudDisplayName.replace(/\.[a-z0-9]+$/i, "") + "." + extension;
             cloudFinalContentType = extension === "webp" ? "image/webp" : "image/jpeg";
         }
+    } else if (/\.mkv$/i.test(cloudDisplayName) && (cloudContentType === "video/webm" || cloudContentType === "video/mp4")) {
+        cloudDisplayName = cloudDisplayName.replace(/\.mkv$/i, cloudContentType === "video/webm" ? ".webm" : ".mp4");
     }
     const realAtt = Attachment.create({
         channel_id: destinationChannelId,
