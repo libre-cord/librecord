@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Storage, StorageRead } from "./Storage";
 import ExifTransformer from "exif-be-gone";
+import { autoOrientImage } from "./imageOrientation";
 
 export class FileStorage implements Storage {
     getFsPath(path: string): string {
@@ -118,7 +119,8 @@ export class FileStorage implements Storage {
         path = await this.safePath(path, true);
         const temporary = `${path}.${randomUUID()}.tmp`;
         try {
-            await pipeline(Readable.from(value), new ExifTransformer(), fs.createWriteStream(temporary, { flags: "wx" }));
+            const oriented = await autoOrientImage(value);
+            await pipeline(Readable.from(oriented), new ExifTransformer(), fs.createWriteStream(temporary, { flags: "wx" }));
             await fsp.rename(temporary, path);
         } finally {
             await fsp.unlink(temporary).catch((error: NodeJS.ErrnoException) => {

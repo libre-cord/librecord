@@ -6,6 +6,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import ExifTransformer from "exif-be-gone";
 import { HTTPError } from "lambert-server/HTTPError";
+import { autoOrientImage } from "./imageOrientation";
 import { QuotaStorageAdapter, QuotaWriteResult } from "./quotaStorage";
 import { StorageQuotaRequest } from "./storageQuota";
 
@@ -229,7 +230,8 @@ export class FileQuotaStorageAdapter implements QuotaStorageAdapter {
     }
     async write(request: StorageQuotaRequest, data: Buffer): Promise<QuotaWriteResult> {
         if (BigInt(data.length) > request.upperBytes) throw new HTTPError("File exceeds storage reservation", 413);
-        return this.perform(request, "write", undefined, () => Readable.from(data), true);
+        const oriented = await autoOrientImage(data);
+        return this.perform(request, "write", undefined, () => Readable.from(oriented), true);
     }
     async clone(request: StorageQuotaRequest, source: { path: string; generation: string }): Promise<QuotaWriteResult> {
         this.validate(source.path);

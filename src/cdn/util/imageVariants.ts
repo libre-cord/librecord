@@ -6,7 +6,7 @@ import { safeMediaType } from "./responseSafety";
 
 export type ImageFormat = "gif" | "webp" | "png" | "jpeg" | "avif";
 export type ImageVariant = { format?: ImageFormat; size?: number; animated: boolean; lossless: boolean };
-export type RenderedImage = { body: Buffer; mime: string };
+export type RenderedImage = { body: Buffer; mime: string; extension?: string };
 
 export const IMAGE_SIZE_MIN = 16;
 export const IMAGE_SIZE_MAX = 4096;
@@ -110,12 +110,35 @@ const loadSharp = () =>
         () => null,
     ));
 
+export async function targetImageExtension(source: Buffer, sourceMime: string | undefined): Promise<"jpg" | "webp" | undefined> {
+    if (!sourceMime || !RENDERABLE_MIME_TYPES.has(sourceMime)) return undefined;
+    if (sourceMime === "image/gif" || sourceMime === "image/apng" || isAnimatedImage(source, sourceMime)) return "webp";
+    const sharp = await loadSharp();
+    if (!sharp) return undefined;
+    try {
+        const metadata = await sharp(source).metadata();
+        return metadata.hasAlpha ? "webp" : "jpg";
+    } catch {
+        return undefined;
+    }
+}
+
+export async function readImageDimensions(buffer: Buffer): Promise<{ width: number; height: number } | undefined> {
+    const sharp = await loadSharp();
+    if (!sharp) return undefined;
+    try {
+        const metadata = await sharp(buffer).metadata();
+        if (metadata.width && metadata.height) return { width: metadata.width, height: metadata.height };
+    } catch {}
+    return undefined;
+}
+
 export async function renderImageVariant(source: Buffer, sourceMime: string | undefined, variant: ImageVariant): Promise<RenderedImage> {
     const original = { body: source, mime: safeMediaType(sourceMime) };
-    const format = variant.format;
-    if (!format || !sourceMime || !RENDERABLE_MIME_TYPES.has(sourceMime)) return original;
+    const requested = variant.format;
+    if (!requested || !sourceMime || !RENDERABLE_MIME_TYPES.has(sourceMime)) return original;
     const sourceAnimated = isAnimatedImage(source, sourceMime);
-    const animated = variant.animated && sourceAnimated && ANIMATABLE_FORMATS.has(format);
+    const animated = variant.animated && sourceAnimated;
     if (animated && !SEQUENCE_DECODABLE_MIME_TYPES.has(sourceMime)) return original;
     const sharp = await loadSharp();
     if (!sharp) return original;
@@ -123,29 +146,15 @@ export async function renderImageVariant(source: Buffer, sourceMime: string | un
     const width = metadata.width ?? 0;
     const frameHeight = metadata.pageHeight ?? metadata.height ?? 0;
     if (width < 1 || frameHeight < 1) return original;
+    const format: ImageFormat = animated || metadata.hasAlpha || sourceMime === "image/gif" || sourceMime === "image/apng" ? "webp" : "jpeg";
     const scale = variant.size ? Math.min(1, variant.size / Math.max(width, frameHeight)) : 1;
     if (scale === 1 && MIME_FORMAT[sourceMime] === format && animated === sourceAnimated) return original;
     let image = sharp(source, { animated, pages: animated ? -1 : 1 }).timeout({ seconds: RENDER_TIMEOUT_SECONDS });
     if (scale < 1) image = image.resize({ width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(frameHeight * scale)), fit: "fill" });
     const timing = animated ? { loop: metadata.loop ?? 0, ...(metadata.delay?.length ? { delay: metadata.delay } : {}) } : {};
-    switch (format) {
-        case "gif":
-            image = image.gif(timing);
-            break;
-        case "webp":
-            image = image.webp({ ...timing, ...(variant.lossless ? { lossless: true } : { quality: 90 }), effort: 2 });
-            break;
-        case "png":
-            image = image.png();
-            break;
-        case "jpeg":
-            image = image.flatten({ background: "#000000" }).jpeg({ quality: variant.lossless ? 100 : 90 });
-            break;
-        case "avif":
-            image = image.avif({ ...(variant.lossless ? { lossless: true } : { quality: 70 }), effort: 2 });
-            break;
-    }
-    return { body: await image.toBuffer(), mime: FORMAT_MIME[format] };
+    if (format === "webp") image = image.webp({ ...timing, ...(variant.lossless ? { lossless: true } : { quality: 90 }), effort: 2 });
+    else image = image.flatten({ background: "#000000" }).jpeg({ quality: variant.lossless ? 100 : 90 });
+    return { body: await image.toBuffer(), mime: FORMAT_MIME[format], extension: format === "webp" ? "webp" : "jpg" };
 }
 
 const cache = new Map<string, RenderedImage>();
@@ -212,9 +221,17 @@ export async function cachedImageVariant(key: string, source: Buffer, variant: I
     return render;
 }
 
+export function setImageDownloadName(res: Response, originalFilename: string, image: RenderedImage) {
+    if (!image.extension) return;
+    const base = originalFilename.replace(/\.[a-z0-9]+$/i, "") || "image";
+    const safe = base.replace(/[^\w.-]/g, "_");
+    res.set("Content-Disposition", `inline; filename="${safe}.${image.extension}"`);
+}
+
 export async function sendImage(req: Request, res: Response, storagePath: string, file: Buffer) {
     const filename = req.path.split("/").pop() ?? "";
     const image = await cachedImageVariant(storagePath, file, imageVariant(filename, req.query));
     res.set("Content-Type", safeMediaType(image.mime));
+    setImageDownloadName(res, filename, image);
     return res.send(image.body);
 }

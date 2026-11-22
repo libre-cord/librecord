@@ -28,6 +28,7 @@ vm.runInNewContext(
         Buffer,
         require(name) {
             if (name === "lambert-server/HTTPError") return { HTTPError };
+            if (name === "./imageOrientation") return { autoOrientImage: async (value) => value };
             return require(name);
         },
     },

@@ -1,5 +1,7 @@
 import { HTTPError } from "lambert-server/HTTPError";
 import { In, Raw } from "typeorm";
+import { storage } from "@spacebar/cdn/util/Storage";
+import { targetImageExtension } from "@spacebar/cdn/util/imageVariants";
 // noinspection ES6PreferShortImport -- Causes a circular reference...
 import { fillComponentMedia, fillMessageUrlEmbeds } from "../utility/EmbedHandlers";
 import { resolveSoundmoji } from "../utility/Soundboard";
@@ -162,17 +164,28 @@ async function processMedia(media: UnfurledMediaItem, messageId: string, batchId
             });
         }
 
+        const contentType = attEnt.contentType || attEnt.userOriginalContentType;
+        let displayName = attEnt.userFilename;
+        let finalContentType = contentType;
+        if (contentType && /^image\//.test(contentType)) {
+            const stored = await storage.get(`attachments/${attEnt.uploadFilename}`);
+            const extension = stored ? await targetImageExtension(stored, contentType) : undefined;
+            if (extension) {
+                displayName = displayName.replace(/\.[a-z0-9]+$/i, "") + "." + extension;
+                finalContentType = extension === "webp" ? "image/webp" : "image/jpeg";
+            }
+        }
         const realAtt = Attachment.create({
-            filename: attEnt.userFilename,
+            filename: displayName,
             size: attEnt.size,
             height: attEnt.height,
             width: attEnt.width,
-            content_type: attEnt.contentType || attEnt.userOriginalContentType,
+            content_type: finalContentType,
             channel_id: channel.id,
             message_id: messageId,
         });
         const cloneResponse = await fetch(
-            `${Config.get().cdn.endpointPrivate?.replace(/\/+$/, "")}/attachments/${attEnt.uploadFilename}/clone_to_message/${messageId}?channel_id=${channel.id}&attachment_id=${realAtt.id}`,
+            `${Config.get().cdn.endpointPrivate?.replace(/\/+$/, "")}/attachments/${attEnt.uploadFilename}/clone_to_message/${messageId}?channel_id=${channel.id}&attachment_id=${realAtt.id}&filename=${encodeURIComponent(displayName)}`,
             {
                 method: "POST",
                 signal: AbortSignal.timeout(15000),
@@ -923,15 +936,26 @@ export async function convertCloudAttachmentToAttachment(
     const permission = await getPermission(actorId, undefined, destinationChannelId);
     if (!permission.has(Permissions.FLAGS.VIEW_CHANNEL) || !permission.has(Permissions.FLAGS.ATTACH_FILES)) throw new HTTPError("Missing attachment permissions", 403);
 
+    const cloudContentType = cloudAttachment.contentType || cloudAttachment.userOriginalContentType;
+    let cloudDisplayName = cloudAttachment.userFilename;
+    let cloudFinalContentType = cloudContentType;
+    if (cloudContentType && /^image\//.test(cloudContentType)) {
+        const stored = await storage.get(`attachments/${cloudAttachment.uploadFilename}`);
+        const extension = stored ? await targetImageExtension(stored, cloudContentType) : undefined;
+        if (extension) {
+            cloudDisplayName = cloudDisplayName.replace(/\.[a-z0-9]+$/i, "") + "." + extension;
+            cloudFinalContentType = extension === "webp" ? "image/webp" : "image/jpeg";
+        }
+    }
     const realAtt = Attachment.create({
         channel_id: destinationChannelId,
         message_id: destinationMessageId,
 
-        filename: cloudAttachment.userFilename,
+        filename: cloudDisplayName,
         size: cloudAttachment.size,
         height: cloudAttachment.height,
         width: cloudAttachment.width,
-        content_type: cloudAttachment.contentType || cloudAttachment.userOriginalContentType,
+        content_type: cloudFinalContentType,
 
         title: cloudAttachmentReference.title,
         duration_secs: cloudAttachmentReference.duration_secs,
@@ -940,7 +964,7 @@ export async function convertCloudAttachmentToAttachment(
         waveform: cloudAttachmentReference.waveform,
     });
     const cloneResponse = await fetch(
-        `${Config.get().cdn.endpointPrivate?.replace(/\/+$/, "")}/attachments/${cloudAttachment.uploadFilename}/clone_to_message/${destinationMessageId}?channel_id=${destinationChannelId}&attachment_id=${realAtt.id}`,
+        `${Config.get().cdn.endpointPrivate?.replace(/\/+$/, "")}/attachments/${cloudAttachment.uploadFilename}/clone_to_message/${destinationMessageId}?channel_id=${destinationChannelId}&attachment_id=${realAtt.id}&filename=${encodeURIComponent(cloudDisplayName)}`,
         {
             method: "POST",
             headers: {

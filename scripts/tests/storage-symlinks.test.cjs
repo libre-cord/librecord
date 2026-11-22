@@ -20,7 +20,16 @@ test("local storage refuses symlink parents and leaves external files untouched"
         ts.transpileModule(await fs.readFile("src/cdn/util/FileStorage.ts", "utf8"), {
             compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
         }).outputText,
-        { module: fixture, exports: fixture.exports, Buffer, require, process: { env: { STORAGE_LOCATION: storageRoot } } },
+        {
+            module: fixture,
+            exports: fixture.exports,
+            Buffer,
+            require(name) {
+                if (name === "./imageOrientation") return { autoOrientImage: async (value) => value };
+                return require(name);
+            },
+            process: { env: { STORAGE_LOCATION: storageRoot } },
+        },
     );
     const storage = new fixture.exports.FileStorage();
     for (const operation of [

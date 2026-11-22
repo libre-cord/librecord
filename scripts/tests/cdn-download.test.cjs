@@ -152,7 +152,7 @@ test("FileStorage streaming opens sparse legacy-sized files without whole-file r
         const filename = path.join(directory, "large.bin");
         await fsp.writeFile(filename, "hello");
         await fsp.truncate(filename, 1024 * 1024 * 1024);
-        const { FileStorage } = load("src/cdn/util/FileStorage.ts");
+        const { FileStorage } = load("src/cdn/util/FileStorage.ts", { "./imageOrientation": { autoOrientImage: async (value) => value } });
         const storage = new FileStorage();
         storage.get = () => {
             throw new Error("Whole read forbidden");
